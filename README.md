@@ -16,6 +16,8 @@ python -m pytest -q                        # tests
 
 Each run writes to `results/<run_name>/`: `virtual_roads.gpkg` (layers `paths`, `origins` and WGS84 copies), `virtual_roads_summary.csv` (one row per origin with a status, length in metres, cost, climb and slope statistics), `bea_start_vertices.gpkg` / `bea_end_vertices.gpkg` (input for the BEA feasibility model), `run.log`, `run_manifest.json` (settings, library versions, input hashes) and the intermediate rasters in `work/`. Inputs are never modified and previous runs are never deleted.
 
+**Full instructions (data sources, projections, data preparation, every setting, outputs): see [`USER_GUIDE.md`](USER_GUIDE.md).**
+
 All defaults are listed and explained in `config.toml`. What changed, and why, is described in `virtual_roads_upgrade.txt`. The original 2021 scripts are kept for reference in `legacy/` (they do not run on current GDAL/shapely, see the upgrade notes). The description below is the original method description; the upgrade notes list where version 2 differs (projected CRS, distance + slope cost, multi-source routing per tile with an adaptive buffer).
 
 Quick description and example
