@@ -1,0 +1,165 @@
+VIRTUAL ROADS - UPGRADES AND FIXES (version 2.0, branch "laptop", 2026-11-25)
+====================================================================================
+
+Issue IDs refer to ../draft.txt (my review: V1-V11, test findings T-V1..T-V10) and to
+suggested_improvements_virtual_roads.docx (B01-B40).
+
+
+1. HOW TO RUN (one unbroken command)
+------------------------------------------------------------------------------------
+    python run_virtual_roads.py                       # example with defaults
+    python run_virtual_roads.py --config other.toml   # your own settings file
+    python run_virtual_roads.py --set surface.max_slope_deg=12 --set paths.run_name=s12
+    python run_virtual_roads.py --print-config        # see every setting
+    python -m pytest -q                               # 11 tests, ~5 s
+
+Environment: Python 3.12 with GDAL, geopandas, rasterio, scikit-image (requirements.txt /
+environment.yml). Tested in the conda env "mucp" (GDAL 3.11, geopandas 1.1, shapely 2.1,
+rasterio 1.5, scikit-image 0.26).
+
+Output of a run: results/<run_name>/
+    virtual_roads.gpkg          layers: paths, origins, paths_wgs84, origins_wgs84
+    virtual_roads_summary.csv   one row per origin (status, length_m, cost, climb, slopes ...)
+    bea_start_vertices.gpkg     origin points (Point, EPSG:4326, fid2, length) for the BEA model
+    bea_end_vertices.gpkg       road end points (same fid2) for the BEA model
+    run.log, run_manifest.json  log; settings, library versions, input SHA-256, timings
+    work/                       projected DEM, slope, cost and road rasters
+
+
+2. NEW FILE LAYOUT
+------------------------------------------------------------------------------------
+    run_virtual_roads.py   command-line entry point
+    config.toml            every setting, with its default and an explanation
+    vroads/config.py       defaults + TOML loading + --set overrides + validation
+    vroads/surface.py      analysis grid, DEM projection, slope, obstacles, roads, cost
+    vroads/points.py       origin grid (was missing from the original script)
+    vroads/routing.py      tiled multi-source least-cost routing with per-origin status
+    vroads/outputs.py      GeoPackage/CSV/BEA vertex export, run manifest
+    vroads/pipeline.py     runs the stages in order, logging, run folder
+    tests/                 unit tests + full example run
+    legacy/                the original 2021 scripts, unchanged (reference only)
+    requirements.txt, environment.yml, .gitignore (results/, __pycache__, *.aux.xml)
+
+
+3. FIXES (each original problem and what was done)
+------------------------------------------------------------------------------------
+Blockers that stopped the original from running (T-V1..T-V3):
+ - B01 / V1  "outDataSet = Non" NameError                -> code rewritten; no such path.
+ - B12 / T-V3 unclosed window ring, fatal on shapely 2   -> windows are array slices; no
+                                                             hand-built polygons at all.
+ - V2 / T-V2  outputs/1000m_source.shp never created     -> points.make_origins() builds the
+                                                             origin grid every run.
+ - B09/B28/T-V1 bare except: hid every error; "success"  -> no bare excepts; per-origin
+              printed when nothing ran                      status; run_manifest.json has
+                                                             status "complete" or "failed".
+Correctness:
+ - B02 / V5   dist_m always 0                            -> length_m (metres), cost, climb_m,
+                                                             descent_m, max/mean slope.
+ - B03        assign_threshold returned the slope array  -> cost_from_slope() returns the cost.
+ - B04        NoData/border turned into zero-cost paths  -> NoData impassable; slope computed
+                                                             with computeEdges.
+ - B06 / V7   slope used scale=111120 (ignores latitude) -> DEM is projected to the equal-area
+              and routing ran in degrees (13% anisotropy)  BSU CRS (square 30 m cells) and slope
+                                                             is computed in degrees there.
+ - B13/B14/B15 buffers and neighbour search in degrees    -> all distances in metres.
+ - B08 / T-V5 points skipped silently (loop bound, no    -> every origin gets a status: ok,
+              path)                                         on_road, no_path, origin_impassable.
+ - T-V5       origins inside water/steep cells           -> snapped to the nearest passable
+                                                             cell (points.snap_origin_radius_m).
+ - T-V6 / B10 1-vertex invalid LineString for origins    -> status "on_road", length 0, no
+              on a road; sys.maxsize as infinity           invalid geometry.
+ - B11/B23    validity tests relied on NoData sign and   -> explicit boolean masks via
+              GDAL burn initialisation                      rasterio.features.rasterize.
+ - B24        template array one row short                -> template raster no longer needed.
+ - B25/B35/B40 CRS in a hand-written .prj; 880 loose      -> one GeoPackage with CRS, stable
+              files; index unrelated to the origin         origin_id ("r<row>_c<col>") + fid2.
+Reproducibility / operations:
+ - B05/T-V9   stale slope.tif silently reused            -> recomputed every run in the run
+                                                             folder.
+ - B07/B19/B25 working copy written into inputs/; clip   -> inputs are read-only; each run has
+              overwrote its own input                       its own folder; existing folder is
+                                                             refused unless run.overwrite=true.
+ - B27/T-V7   range(0, 24) magic loop                    -> tiles computed from the data.
+ - B29        wrong timings                              -> per-stage timings in the manifest.
+ - B32/V9     relative GDAL_DATA + bundled gdal-data      -> not used any more (the gdal-data/
+                                                             folder can be deleted).
+ - B26/B33/B37 dead code, duplicate crops, orphan files  -> removed with the rewrite.
+ - S11/S12    driver named "tests" without tests; no      -> real tests in tests/; pinned
+              environment file                             requirements; .gitignore.
+ - README     wrong script name; said slopes "< 15"      -> fixed (slopes >= 15 are removed).
+              were removed
+
+
+4. ALGORITHM IMPROVEMENTS
+------------------------------------------------------------------------------------
+a) Projected, isotropic analysis grid. The DEM is warped to the CRS of the BSU template
+   (Albers equal area, metres) at surface.cell_size_m (30 m). Slope is Horn's method in
+   degrees. North-south and east-west moves now cost the same per metre.
+
+b) Cost model "distance_slope" (default):  cost per metre = 1 + slope_weight * slope / max_slope.
+   The original used slope alone, so flat ground was free and routes could wander
+   (legacy routes up to 10.2 km; new max 5.4 km, median 16% shorter for the same origins).
+   The original behaviour is still available: --set surface.cost_function=slope_only.
+
+c) Multi-source routing. One MCP_Geometric run per tile, seeded from ALL road cells, gives
+   the cheapest cost from every cell to the network; each origin is then a traceback. The
+   original ran one MCP per origin and rasterised the road layer per origin.
+   Example: routing 222 origins went from ~49 s to ~1 s.
+
+d) Adaptive window buffer (replaces the fixed 0.01 degree window). If no road is reachable
+   or a path touches the window edge, the buffer is doubled (up to
+   routing.max_tile_buffer_m) and the origin re-routed. This removes edge effects instead
+   of hoping the buffer is big enough. Paths still limited at the maximum are flagged
+   (edge_limited = true).
+
+e) Richer attributes per route: length_m, cost, climb_m, descent_m, max_slope_deg,
+   mean_slope_deg, snapped_m, buffer_m, road end coordinates.
+
+f) Direct hand-over to the BEA model: bea_start_vertices.gpkg / bea_end_vertices.gpkg with
+   Point geometries (the original MultiPoint vertices break current GDAL in BEA, see
+   bea_feasibility_upgrades.txt).
+
+
+5. SETTINGS (all in config.toml; defaults = original hard-coded values where one existed)
+------------------------------------------------------------------------------------
+[paths]   dem, obstacles_dir, roads, grid_template, roi, output_dir, run_name
+[surface] analysis_crs ("" = template CRS), cell_size_m = 30, dem_resampling = bilinear,
+          dem_fill_max_distance_cells = 0, max_slope_deg = 15 (original), cost_function =
+          distance_slope (original: slope_only), slope_weight = 1, restrict_to_roi = true
+          (original), roi_buffer_m = 0, obstacle_all_touched = true, road_all_touched = true,
+          road_filter = "" (e.g. "FEAT_TYPE != 'Street'")
+[points]  origin_spacing_m = 1000 (original), snap_origin_radius_m = 100
+[routing] tile_size_m = 20000, tile_buffer_m = 1000 (original ~0.01 deg),
+          max_tile_buffer_m = 16000, fully_connected = true (original)
+[output]  gpkg_name, write_wgs84 = true, export_bea_vertices = true,
+          keep_intermediate = true, simplify_tolerance_m = 0
+[run]     log_level = INFO, overwrite = false
+Unknown keys or wrong types are rejected with a clear error.
+
+
+6. TEST AND VALIDATION RESULTS
+------------------------------------------------------------------------------------
+pytest: 11 passed (config defaults == config.toml, override parsing/validation, cost
+functions, routing around a wall, statuses on_road/no_path/origin_impassable, snapping,
+adaptive buffer, multi-source cheapest road, full example end to end, BEA vertex export,
+inputs untouched / re-run refused).
+
+Example (Upington ROI, default settings): 222 origins (same as the original), 218 ok,
+2 on_road, 2 origin_impassable (inside water with no passable cell within 100 m),
+0 edge_limited, 7 origins snapped out of obstacles. Total run ~6 s.
+Compared with the committed 2021 routes for the same origins: start points match (median
+11 m), 52% end at the same road point (within 100 m); new routes are shorter (median
+ratio 0.84) because flat ground is no longer free and the grid is isotropic.
+
+
+7. KNOWN LIMITATIONS / FUTURE WORK (not done in this upgrade)
+------------------------------------------------------------------------------------
+- Physics extensions from the review documents (graded slope penalties, land-cover traction,
+  switchback penalties, river crossings, seasonality) are not implemented; the cost function
+  is isolated in surface.cost_from_slope() so they can be added there.
+- The BEA proximity rasters (NGI/VR 100 m proximity) are not generated by this model yet.
+- National scale: tiling keeps memory bounded, but the DEM is still warped in one piece;
+  for all of South Africa warp per tile or use a VRT.
+- The legacy/ scripts are kept unchanged for reference and do not run on current libraries.
+- gdal-data/ and the committed outputs/, temp/, output_paths/ folders are no longer used by
+  the code and can be deleted when you are happy with version 2.

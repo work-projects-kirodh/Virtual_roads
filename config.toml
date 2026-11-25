@@ -1,0 +1,52 @@
+# Virtual Roads model settings.
+# Every value below is the DEFAULT. Change any value here, pass another file with
+#   python run_virtual_roads.py --config my_settings.toml
+# or override single values on the command line:
+#   python run_virtual_roads.py --set surface.max_slope_deg=12 --set paths.run_name=test
+# Relative paths are resolved against the folder of the config file.
+
+[paths]
+dem = "inputs/SRTM_clip.tif"                    # DEM (any CRS)
+obstacles_dir = "inputs/obstacles"              # every .shp/.gpkg in here is a barrier (water etc.)
+roads = "inputs/roads/NGI_2019_road_clip.shp"   # existing roads = destinations
+grid_template = "inputs/BSU_100m_clip.tif"      # equal-area BSU grid: analysis CRS + origin alignment
+roi = "inputs/ROI.shp"                          # region of interest ("" = whole DEM)
+output_dir = "results"                          # runs are written to <output_dir>/<run_name>/
+run_name = ""                                   # "" = timestamp
+
+[surface]
+analysis_crs = ""                 # "" = CRS of grid_template; or e.g. "EPSG:32734"
+cell_size_m = 30.0                # cost-surface resolution (SRTM 1 arc-second ~ 30 m)
+dem_resampling = "bilinear"       # nearest | bilinear | cubic
+dem_fill_max_distance_cells = 0   # fill DEM voids up to this many cells (0 = off)
+max_slope_deg = 15.0              # cells at or above this slope are impassable (original: 15)
+cost_function = "distance_slope"  # "distance_slope" (1 + slope_weight*slope/max_slope per metre)
+                                  # or "slope_only" (original: cost = slope, flat ground is free)
+slope_weight = 1.0                # how strongly slope is penalised in "distance_slope"
+restrict_to_roi = true            # routes may not leave the ROI (original behaviour)
+roi_buffer_m = 0.0                # extra margin processed around the ROI if restrict_to_roi = false
+obstacle_all_touched = true       # burn every cell an obstacle touches
+road_all_touched = true           # burn every cell a road touches
+road_filter = ""                  # pandas query to choose destination roads, e.g. "FEAT_TYPE != 'Street'"
+
+[points]
+origin_spacing_m = 1000.0         # origin grid spacing (original: 1 km BSU aggregate)
+snap_origin_radius_m = 100.0      # move origins inside water/steep cells to the nearest passable
+                                  # cell within this distance (0 = off -> status origin_impassable)
+
+[routing]
+tile_size_m = 20000.0             # origins are routed in tiles of this size
+tile_buffer_m = 1000.0            # buffer around a tile (original: 0.01 degree ~ 1 km)
+max_tile_buffer_m = 16000.0       # buffer is doubled up to this when a path hits the window edge
+fully_connected = true            # 8-connected moves (original: true)
+
+[output]
+gpkg_name = "virtual_roads.gpkg"  # layers: paths, origins (+ _wgs84 copies)
+write_wgs84 = true
+export_bea_vertices = true        # bea_start_vertices.gpkg / bea_end_vertices.gpkg for the BEA model
+keep_intermediate = true          # keep projected DEM, slope, cost and road rasters in <run>/work
+simplify_tolerance_m = 0.0        # simplify output paths (0 = off)
+
+[run]
+log_level = "INFO"                # DEBUG | INFO | WARNING
+overwrite = false                 # allow writing into an existing run folder

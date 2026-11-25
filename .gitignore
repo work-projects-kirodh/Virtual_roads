@@ -1,0 +1,10 @@
+# model runs (each run writes results/<run_name>/)
+results/
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+# GIS sidecars created when tools compute statistics
+*.aux.xml
+# OS
+.DS_Store
